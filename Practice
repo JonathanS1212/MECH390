@@ -1,0 +1,107 @@
+
+import pandas as pd
+import numpy as np
+from statsmodels.multivariate.manova import MANOVA
+import matplotlib.pyplot as plt
+import seaborn as sm
+from scipy.stats import pearsonr
+
+
+#I want to define the range 
+
+Range = np.power(2,6) #we can also define the range of discrete (100) 
+
+#define our independent variables. We want to test a range of them so we are gonna use linspace (evenly spaced array)
+
+l_range = np.linspace(0,1.5,num=Range) 
+am_range = np.linspace(np.pi/2, np.pi, num=Range)   # fixed ordering: start at pi/2 -> pi
+an_range = np.linspace(0, np.pi/2, num=Range)
+
+#create an array via the meshgrid function by combining the independent variables 
+
+L_grid, am_grid, an_grid = np.meshgrid(l_range, am_range, an_range)
+
+#define how our independent variables relate to our depedent variables
+def dx(L, am, an):
+    # use the function parameter names (L) not an undefined global
+    return 2 * L * np.sin(0.25 * (am - an)) * np.cos(0.25 * (am + an))
+
+def dy(L, am, an):
+    return -2 * L * np.sin(0.25 * (an + am)) * np.sin(0.25 * (an - am))
+
+#Now that we have a way to create, we need to make a Dataframe to hold our data  => this is handle via the Panda library 
+
+df = pd.DataFrame({
+    'L': L_grid.ravel(), #ravel is used bc if not we cannot go from numpy to pandas, we need to flatten the 3D arrays into 1D arrays for DataFrame creation
+    'am': am_grid.ravel(),
+    'an': an_grid.ravel(),
+   
+})
+
+#now let us add onto the Dataframe for the dx and dy
+
+df['DX'] = dx(df['L'].values, df['am'].values, df['an'].values) #using the dx function that we defined earlier, the arrays of df[DX] will be created as a new column
+df['DY'] = dy(df['L'].values, df['am'].values, df['an'].values) 
+
+#since many values will result with a DX value inferior of 0.250, we want to filter this
+
+df_dxfiltered = df[df['DX'] > 0.250].copy() #here we are making a new dataframe with the filtered values.
+
+#now this is the MAOV part (new code)
+
+maov = MANOVA.from_formula('DX + DY ~ L + am + an', data=df_dxfiltered) #left hand side says the depedent variables, and RHS is the independent. Than we specify which dataframe is our concern
+mv_test = maov.mv_test() #function that actually runs the "formula of MANOVA", MANOVA: multivariate ANOVA (when we have dependence variables)
+
+print(mv_test) #this will print the results of the MANOVA test, we can see the p values and the F values for each independent variable and their interaction effects
+
+#now since the p-values are very low for the geometry. We need another way. We introduce the Shapiro test 
+
+def sensitivity(inputs, outputs):
+    S = [] #create a list to hold the sensitivity values
+    for i in range(inputs.shape[1]): #Loop will go through each independent variable 
+        r, _ = pearsonr(inputs[:,i], outputs) #calculate the Pearson correlation coefficient between the independent variable and the output
+        S.append(abs(r)) #append the absolute value of the correlation coefficient to the sensitivity list ("glue it to the list")
+    S = np.array(S)
+    # normalize so indices sum to 1 (easier to compare)
+    if S.sum() == 0:
+        return S
+    return S / S.sum()
+
+inputs = df_dxfiltered[['L','am','an']].values
+outputs_dx = df_dxfiltered['DX'].values
+outputs_dy = df_dxfiltered['DY'].values
+
+s_indices_dx = sensitivity(inputs, outputs_dx)
+s_indices_dy = sensitivity(inputs, outputs_dy)
+
+sensitivity_df = pd.DataFrame({
+    'Variable': ['L', 'am', 'an'],
+    'Sensitivity_DX': s_indices_dx,
+    'Sensitivity_DY': s_indices_dy
+})
+
+print(sensitivity_df)
+ 
+#create Heatmap 
+
+LHS = ['L','am','an']
+X_LHS = df_dxfiltered[LHS].values
+
+sens_dx=sensitivity(X_LHS,df_dxfiltered['DX'].values)
+sens_dy=sensitivity(X_LHS,df_dxfiltered['DY'].values) #run our sensitivity function 
+
+#create a comparison DataFrame
+comparison_df=pd.DataFrame({
+    'DX_Sens':sens_dx,
+    'DY_Sens':sens_dy
+}, index=LHS)
+
+#Visualization 
+
+plt.figure(figsize=(10,6)) #figure size 
+sm.heatmap(comparison_df,annot=True,cmap="YlGnBu") #heatmap with annotations and a color map
+plt.title(r'Sensitivity: DX and DY (merged) — Length $L$, & Angles $\alpha$ $\alpha_m$, $\alpha_n$')
+plt.savefig('sensitivity_heatmap.png') #save the figure as a PNG file
+plt.show()
+
+
