@@ -1,0 +1,342 @@
+import math
+import statistics
+import csv
+
+# -----------------------------
+# Taguchi L9 OA (3-level)
+# columns: factor1, factor2, factor3
+# -----------------------------
+L9 = [
+    [1, 1, 1],
+    [1, 2, 2],
+    [1, 3, 3],
+    [2, 1, 2],
+    [2, 2, 3],
+    [2, 3, 1],
+    [3, 1, 3],
+    [3, 2, 1],
+    [3, 3, 2],
+]
+
+# -----------------------------
+# Basic stats: Pearson correlation
+# -----------------------------
+def pearson_corr(x, y):
+    pairs = [(a, b) for a, b in zip(x, y) if a is not None and b is not None]
+    if len(pairs) < 3:
+        return None
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    mx, my = statistics.mean(xs), statistics.mean(ys)
+    num = sum((a - mx) * (b - my) for a, b in pairs)
+    denx = math.sqrt(sum((a - mx) ** 2 for a in xs))
+    deny = math.sqrt(sum((b - my) ** 2 for b in ys))
+    if denx == 0 or deny == 0:
+        return None
+    return num / (denx * deny)
+
+def related_percent(x, y):
+    c = pearson_corr(x, y)
+    return None if c is None else abs(c) * 100.0
+
+# -----------------------------
+# Slider-crank kinematics (offset slider line y = -e)
+# xS(theta) = r cosθ + sqrt(L^2 - (e + r sinθ)^2)
+# -----------------------------
+def slider_x(theta, r, L, e):
+    s = e + r * math.sin(theta)
+    inside = L * L - s * s
+    if inside < 0:
+        return None
+    return r * math.cos(theta) + math.sqrt(inside)
+
+def build_theta_grid(step_deg):
+    n = int(round(360.0 / step_deg))
+    return [2.0 * math.pi * i / n for i in range(n)], n
+
+def central_diff_periodic(values, dt):
+    """Central difference with periodic wrap-around."""
+    n = len(values)
+    out = [None] * n
+    for i in range(n):
+        im1 = (i - 1) % n
+        ip1 = (i + 1) % n
+        if values[im1] is None or values[ip1] is None:
+            out[i] = None
+        else:
+            out[i] = (values[ip1] - values[im1]) / (2.0 * dt)
+    return out
+
+def second_diff_periodic(values, dt):
+    """Second central difference with periodic wrap-around."""
+    n = len(values)
+    out = [None] * n
+    for i in range(n):
+        im1 = (i - 1) % n
+        ip1 = (i + 1) % n
+        if values[im1] is None or values[i] is None or values[ip1] is None:
+            out[i] = None
+        else:
+            out[i] = (values[ip1] - 2.0 * values[i] + values[im1]) / (dt * dt)
+    return out
+
+# -----------------------------
+# Dynamic model (NO gravity)
+# Pin forces:
+#  - At S (rod on slider): Sx, Sy
+#  - At A (crank on rod): Ax, Ay
+#  - At O (ground on crank): Ox, Oy
+#
+# Uses explicit (non-matrix) rod solution:
+# Ax = m3*aG3x + Sx
+# Sy = ((I3*alpha3 - rGSy*Sx) + rGAy*Ax - rGAx*(m3*aG3y)) / (rGAx - rGSx)
+# Ay = Sy + m3*aG3y
+# -----------------------------
+def max_pin_forces_one_rev(
+    r, L, e,
+    omega,
+    alpha2,
+    m2, m3, m4,
+    I3G,
+    rG2,
+    aG3,     # distance A -> rod CG (often L/2)
+    Fext,    # external force on slider (+x)
+    step_deg=1.0,
+    eps=1e-9
+):
+    thetas, n = build_theta_grid(step_deg)
+    dt = (math.radians(step_deg) / omega) if omega != 0 else None
+    if dt is None or dt == 0:
+        return None  # need omega
+
+    # Geometry arrays
+    xA = [r * math.cos(th) for th in thetas]
+    yA = [r * math.sin(th) for th in thetas]
+    yS = [-e for _ in thetas]
+    xS = []
+    phi = []
+    ux = []
+    uy = []
+    xG3 = []
+    yG3 = []
+
+    for i, th in enumerate(thetas):
+        xs = slider_x(th, r, L, e)
+        if xs is None:
+            xS.append(None); phi.append(None); ux.append(None); uy.append(None); xG3.append(None); yG3.append(None)
+            continue
+        xS.append(xs)
+        dy = yS[i] - yA[i]
+        dx = xs - xA[i]
+        ph = math.atan2(dy, dx)
+        phi.append(ph)
+        # unit vector A->S
+        uxi = dx / L
+        uyi = dy / L
+        ux.append(uxi)
+        uy.append(uyi)
+        # rod CG
+        xG3.append(xA[i] + aG3 * uxi)
+        yG3.append(yA[i] + aG3 * uyi)
+
+    # Derivatives
+    # slider accel
+    aS = second_diff_periodic(xS, dt)
+
+    # rod angular accel
+    # NOTE: phi wrap can cause a 2π jump. For small step and typical motion, OK.
+    alpha3 = second_diff_periodic(phi, dt)
+
+    # rod CG accelerations
+    aG3x = second_diff_periodic(xG3, dt)
+    aG3y = second_diff_periodic(yG3, dt)
+
+    # crank CG accelerations (analytic)
+    # aG2 = -rG2*omega^2*[cos, sin] + alpha2 terms
+    aG2x = [(-rG2 * omega * omega * math.cos(th) - rG2 * alpha2 * math.sin(th)) for th in thetas]
+    aG2y = [(-rG2 * omega * omega * math.sin(th) + rG2 * alpha2 * math.cos(th)) for th in thetas]
+
+    # Loop: compute forces each theta, track maxima of resultants
+    max_FA = None
+    max_FS = None
+    max_FO = None
+
+    for i in range(n):
+        if aS[i] is None or aG3x[i] is None or aG3y[i] is None or alpha3[i] is None:
+            continue
+        if xS[i] is None or xG3[i] is None or yG3[i] is None:
+            continue
+
+        # Slider force balance in x: Sx + Fext = m4*aS  => Sx = m4*aS - Fext
+        Sx = m4 * aS[i] - Fext
+
+        # Moment arms from rod CG
+        rGAx = xA[i] - xG3[i]
+        rGAy = yA[i] - yG3[i]
+        rGSx = xS[i] - xG3[i]
+        rGSy = yS[i] - yG3[i]
+
+        # Rod x-force: Ax = m3*aG3x + Sx
+        Ax = m3 * aG3x[i] + Sx
+
+        denom = (rGAx - rGSx)
+        if abs(denom) < eps:
+            continue  # singular/near singular configuration
+
+        # Rod moment about CG -> solve Sy
+        # (-rGAy)Ax + (rGAx)Ay - (rGSx)Sy = I3*alpha3 - rGSy*Sx
+        # with Ay = Sy + m3*aG3y  (from y-force)
+        # => Sy = ( (I3*alpha3 - rGSy*Sx) + rGAy*Ax - rGAx*(m3*aG3y) ) / (rGAx - rGSx)
+        Sy = ((I3G * alpha3[i] - rGSy * Sx) + rGAy * Ax - rGAx * (m3 * aG3y[i])) / denom
+        Ay = Sy + m3 * aG3y[i]
+
+        # Crank pivot reactions: Ox - Ax = m2*aG2x  => Ox = m2*aG2x + Ax
+        #                        Oy - Ay = m2*aG2y  => Oy = m2*aG2y + Ay
+        Ox = m2 * aG2x[i] + Ax
+        Oy = m2 * aG2y[i] + Ay
+
+        FA = math.sqrt(Ax * Ax + Ay * Ay)
+        FS = math.sqrt(Sx * Sx + Sy * Sy)
+        FO = math.sqrt(Ox * Ox + Oy * Oy)
+
+        max_FA = FA if (max_FA is None or FA > max_FA) else max_FA
+        max_FS = FS if (max_FS is None or FS > max_FS) else max_FS
+        max_FO = FO if (max_FO is None or FO > max_FO) else max_FO
+
+    return max_FA, max_FS, max_FO
+
+# -----------------------------
+# Build Taguchi DOE (L9) for r, L, e
+# -----------------------------
+def taguchi_L9_runs(r_levels, L_levels, e_levels):
+    runs = []
+    for row in L9:
+        r = r_levels[row[0]-1]
+        L = L_levels[row[1]-1]
+        e = e_levels[row[2]-1]
+        runs.append({"r": r, "L": L, "e": e})
+    return runs
+
+# -----------------------------
+# Main
+# -----------------------------
+if __name__ == "__main__":
+    # --- EDIT: factor levels (meters) ---
+    r_levels = [0.025, 0.035, 0.045]
+    L_levels = [0.120, 0.150, 0.180]
+    e_levels = [0.000, 0.010, 0.020]
+
+    # --- EDIT: operating + mass properties ---
+    omega = 50.0     # rad/s
+    alpha2 = 0.0     # rad/s^2
+    Fext = 0.0       # N (external slider load +x)
+
+    m2 = 1.0
+    m3 = 1.0
+    m4 = 1.0
+
+    # Moments of inertia (about CG), typical assumptions:
+    # Rod slender: I3G = (1/12)*m3*L^2 -> but L changes in DOE, so compute per run.
+    # Crank CG distance:
+    # rG2 often r/2 for uniform bar
+    # aG3 often L/2 for uniform rod
+    #
+    # Step size:
+    step_deg = 1.0
+
+    runs = taguchi_L9_runs(r_levels, L_levels, e_levels)
+
+    results = []
+    for i, run in enumerate(runs, start=1):
+        r = run["r"]
+        L = run["L"]
+        e = run["e"]
+
+        rG2 = r / 2.0
+        aG3 = L / 2.0
+        I3G = (1.0/12.0) * m3 * L * L
+
+        maxFA, maxFS, maxFO = max_pin_forces_one_rev(
+            r=r, L=L, e=e,
+            omega=omega, alpha2=alpha2,
+            m2=m2, m3=m3, m4=m4,
+            I3G=I3G, rG2=rG2, aG3=aG3,
+            Fext=Fext,
+            step_deg=step_deg
+        )
+
+        results.append({
+            "Run": i, "r": r, "L": L, "e": e,
+            "Max_FA": maxFA, "Max_FS": maxFS, "Max_FO": maxFO
+        })
+
+    # Save raw DOE results
+    with open("taguchi_max_pin_forces.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["Run","r","L","e","Max_FA","Max_FS","Max_FO"])
+        w.writeheader()
+        w.writerows(results)
+    print("Saved raw DOE results: taguchi_max_pin_forces.csv")
+
+    # Compute relatedness (%) between factors and max pin forces
+    R = [r["r"] for r in results]
+    Ls = [r["L"] for r in results]
+    E = [r["e"] for r in results]
+    MaxFA = [r["Max_FA"] for r in results]
+    MaxFS = [r["Max_FS"] for r in results]
+    MaxFO = [r["Max_FO"] for r in results]
+
+    factors = [("r", R), ("L", Ls), ("e", E)]
+    outputs = [("Max |F_A|", MaxFA), ("Max |F_S|", MaxFS), ("Max |F_O|", MaxFO)]
+
+    rel_table = []
+    print("\nRelatedness (%) = |Pearson ρ| × 100")
+    for fname, fvals in factors:
+        row = {"Factor": fname}
+        for oname, ovals in outputs:
+            rp = related_percent(fvals, ovals)
+            row[oname] = rp
+            print(f"{fname} vs {oname}: {rp:.2f}%" if rp is not None else f"{fname} vs {oname}: None")
+        rel_table.append(row)
+
+    # Save relatedness table
+    with open("taguchi_pinforce_relatedness.csv", "w", newline="", encoding="utf-8") as f:
+        fieldnames = ["Factor"] + [o[0] for o in outputs]
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rel_table)
+    print("\nSaved relatedness table: taguchi_pinforce_relatedness.csv")
+
+    # Heatmap plotting (optional)
+    try:
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        data = np.array([
+            [rel_table[0]["Max |F_A|"], rel_table[0]["Max |F_S|"], rel_table[0]["Max |F_O|"]],
+            [rel_table[1]["Max |F_A|"], rel_table[1]["Max |F_S|"], rel_table[1]["Max |F_O|"]],
+            [rel_table[2]["Max |F_A|"], rel_table[2]["Max |F_S|"], rel_table[2]["Max |F_O|"]],
+        ], dtype=float)
+
+        fig, ax = plt.subplots(figsize=(7.2, 3.6))
+        im = ax.imshow(data, aspect="auto")
+
+        ax.set_yticks(np.arange(3))
+        ax.set_yticklabels(["r", "L", "e"])
+        ax.set_xticks(np.arange(3))
+        ax.set_xticklabels(["Max |F_A|", "Max |F_S|", "Max |F_O|"])
+        ax.set_title("Relatedness Heatmap (%) – Max Pin Forces (Taguchi DOE)")
+        plt.colorbar(im, ax=ax, label="Relatedness (%)")
+
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                v = data[i, j]
+                ax.text(j, i, f"{v:.1f}%" if np.isfinite(v) else "NaN",
+                        ha="center", va="center")
+
+        plt.tight_layout()
+        plt.show()
+
+    except Exception as ex:
+        print("\nHeatmap skipped (numpy/matplotlib not available).")
+        print("Install with: python -m pip install numpy matplotlib")
+        print("Error was:", ex)
