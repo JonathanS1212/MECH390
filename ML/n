@@ -1,0 +1,227 @@
+\documentclass[11pt, a4paper]{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{titlesec}
+\usepackage{amsmath, amssymb}
+\usepackage{tikz}
+\usetikzlibrary{decorations.pathmorphing, patterns, arrows.meta, calc}
+\usepackage{graphicx}
+\usepackage{float}
+\raggedbottom  
+
+
+\newcommand{\drawVehicleSystem}{
+    \begin{tikzpicture}[>=Stealth, thick, scale=0.8, every node/.style={scale=0.8}]
+        \def\bumpL{2} \def\bumpA{0.5} \def\distD{3}
+        \draw (0,0) -- (\distD,0);
+        \draw (\distD,0) .. controls (\distD + \bumpL/4, \bumpA) and (\distD + 3*\bumpL/4, \bumpA) .. (\distD + \bumpL, 0);
+        \fill[pattern=north east lines] (0,0) rectangle (\distD, -0.15);
+        \draw[decoration={aspect=0.3, segment length=1.5mm, amplitude=2mm, coil}, decorate] (0.6, 0.3) -- (0.6, 1.8);
+        \draw (1.0, 0.3) -- (1.0, 0.7); \draw (0.85, 0.7) -- (1.15, 0.7);
+        \draw (0.85, 0.9) -- (0.85, 0.6) -- (1.15, 0.6) -- (1.15, 0.9);
+        \draw (1.0, 0.9) -- (1.0, 1.8);
+        \draw[fill=gray!20] (0.2, 1.8) rectangle (1.4, 2.6);
+        \node at (0.8, 2.2) {$m$}; \node at (0.3, 1.1) {$k$}; \node at (1.4, 1.1) {$c$};
+        \draw[->, ultra thick] (1.6, 2.2) -- (2.2, 2.2) node[right] {$V$};
+    \end{tikzpicture}
+}
+
+\newcommand{\drawSinusoidalBump}[3]{
+    \begin{tikzpicture}[>=Stealth, thick]
+        \def\L{#1} \def\A{#2} \def\off{#3}
+        \draw (-1, 0) -- (0,0);
+        \draw (\L, 0) -- (\L+1, 0);
+        \draw[smooth, samples=100, domain=0:\L] 
+            plot (\x, {\A/2 * (1 - cos(deg(2*pi*\x/\L)))});
+        \draw[dashed, gray] (0,0) -- (\L,0);
+        \draw[dashed, gray] (0,0) -- (0,-0.6);
+        \draw[dashed, gray] (\L,0) -- (\L,-0.6);
+        \draw[<->] (0,-0.4) -- (\L,-0.4) node[midway, fill=white, inner sep=1pt] {$L$};
+        \draw[<->] ({\L/2}, 0) -- ({\L/2}, \A);
+        \node at ({\L/2 + \off}, {\A/2}) [right] {$A$};
+    \end{tikzpicture}
+}
+
+\newcommand{\drawSuspensionAnalysis}[3]{
+    \begin{tikzpicture}[>=Stealth, thick, scale=#1, every node/.style={scale=#1}]
+        \def\L{#2} \def\h{#3}
+        \def\mH{0.8} \def\mW{1.2}
+        
+        % 1. Ground and x-axis
+        \draw[->] (-1.5, 0) -- (\L + 1.5, 0) node[right] {$x$};
+        \fill[gray!40] (-1.5, 0) rectangle (\L + 1.5, -0.3);
+        
+        % 2. The Bump (Circular Segment)
+        % Coordinates for the arc: starts at 0, ends at L, peak at h.
+        % Using a simple parabola or arc approximation for the visual:
+        \draw[fill=gray!40] (0,0) parabola bend (\L/2, \h) (\L, 0);
+        
+        % 3. Dimension labels (L and h)
+        \draw[|<->|] (0, -0.5) -- (\L, -0.5) node[midway, fill=white] {$L$};
+        \node at (0, -0.5) [left] {$t=0$};
+        
+        \draw[<->] (\L + 0.2, 0) -- (\L + 0.2, \h);
+        \node at (\L + 0.2, \h/2) [right] {$h$};
+        \draw[thin, gray] (0, \h) -- (\L + 0.2, \h);
+
+        % 4. Positioning the Vehicle (At current time t, on the bump)
+        \def\currX{0.4*\L} % Example position at 40% across the bump
+        \def\yZero{0.85*\h} % Approximate height at that X
+        
+        % Wheel and Base plate
+        \draw[fill=gray!80] (\currX-0.6, 0.8+\yZero) rectangle (\currX+0.6, 1.0+\yZero);
+        \draw (\currX, 0.8+\yZero) -- (\currX, 0.2+\yZero);
+        \fill (\currX, 0.2+\yZero) circle (0.1); % Wheel contact
+        
+        % y0(t) Input Label
+        \draw[dashed, gray] (\currX - 1.2, \yZero) -- (\currX, \yZero);
+        \draw[<->] (\currX - 1.0, 0) -- (\currX - 1.0, \yZero) node[midway, left] {$y_0(t)$};
+
+        % 5. Suspension Components
+        % Damper (c)
+        \draw (\currX-0.3, 1.0+\yZero) -- (\currX-0.3, 1.4+\yZero);
+        \draw (\currX-0.4, 1.4+\yZero) -- (\currX-0.2, 1.4+\yZero);
+        \draw (\currX-0.4, 1.6+\yZero) -- (\currX-0.4, 1.35+\yZero) -- (\currX-0.2, 1.35+\yZero) -- (\currX-0.2, 1.6+\yZero);
+        \draw (\currX-0.3, 1.5+\yZero) -- (\currX-0.3, 2.5+\yZero + 0.4); % Rod to mass
+        \node at (\currX-0.4, 1.8+\yZero) [left] {$c$};
+
+        % Spring (k)
+        \draw[decoration={aspect=0.3, segment length=1.2mm, amplitude=1.5mm, coil}, decorate] 
+            (\currX+0.3, 1.0+\yZero) -- (\currX+0.3, 2.5+\yZero + 0.4);
+        \node at (\currX+0.4, 1.8+\yZero) [right] {$k$};
+
+        % 6. Mass and y(t) Output
+        \node[draw, fill=gray!20, minimum width=\mW cm, minimum height=\mH cm, line width=1pt] 
+            (Mass) at (\currX, 2.5+\yZero+0.4 + \mH/2) {$m$};
+        
+        \draw[->] (Mass.east) -- ($(Mass.east) + (0.4, 0)$) -- ($(Mass.east) + (0.4, 1.0)$) node[above] {$y(t)$};
+        
+        % Velocity u
+        \draw[->, thick] (\currX+0.7, 0.9+\yZero) -- (\currX+1.3, 0.9+\yZero) node[right] {$u$};
+
+    \end{tikzpicture}
+}
+
+
+% --- Custom Command: Free Body Diagram ---
+% Parameters: #1 = Scale
+% \newcommand{\drawFBD}[1
+% ]{
+%     \begin{tikzpicture}[>=Stealth, thick, scale=#1, every node/.style={scale=#1}]
+        
+%         % Parameters for sizing
+%         \def\mH{1.0} \def\mW{1.6} \def\fL{1.2}
+
+%         % 1. The Mass Block
+%         \node[draw, fill=gray!20, minimum width=\mW cm, minimum height=\mH cm, line width=1pt] 
+%             (M) at (0,0) {\large $m$};
+
+%           % 3. Damping Force Arrow (Right Side)
+%         \draw[->, ultra thick] ($(M.south) - (\mW/4, 0)$) -- ($(M.south) -x(\mW/4, \fL)$);
+%         \node at ($(M.south) - (\mW/4, \fL)$) [below left, inner sep=2pt] {$c(\dot{y}-\dot{y}_0)$};
+
+%        % 2. Spring Force Arrow (Shifted Right)
+%         % Using (\mW/4) to move the arrow to the right of the center
+%         \draw[->, ultra thick] ($(M.south) + (\mW/4, 0)$) -- ($(M.south) + (\mW/4, -\fL)$);
+%         % 3. Label placed BELOW RIGHT of the arrow tip
+%         \node at ($(M.south) + (\mW/4, -\fL)$) [below right, inner sep=2pt] {$k(y-y_0)$};
+
+%         % 4. Output State Indicator (Matches your FBD screenshot)
+%         \draw[->] (M.east) -- ($(M.east) + (0.4, 0)$) -- ($(M.east) + (0.4, 1.2)$);
+%         \node at ($(M.east) + (0.4, 1.2)$) [above] {$\ddot{y}$};
+
+%     \end{tikzpicture}
+% }
+
+\title{MECH 375 Assignment }
+\author{Jonathan Sztainberg, Ethan Black, Giovannis Mans}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+ - Comfort
+ - Road Disturbance 
+ - Vehicle Response
+
+\section{Problem Part 2}
+
+A vehicle wheel is selected as the system to analyze over a speed dumb. The schematic provided per \ref{fig:vehicle_schematic} allows to begin our analysis of the vibrational response to then determine the design aspect.
+
+\begin{figure}[ht]
+    \centering
+    \drawVehicleSystem
+    \caption{Problem Statement of Vehicle Approaching a sinusoidal shaped bump.}
+    \label{fig:vehicle_schematic}
+\end{figure}
+
+The system moves at a constant horizontal velocity $V$. The input to the system is the vertical displacement provided by the road profile over a distance $d$.
+
+\subsection{Geometric Analysis of the Road Obstacle}
+The bump can be characterized as a sinusoidal undulate. With a maximum amplitude corresponding to the maximum height $h$ of the bump, and a lenght of $2L$ . The equation can be expressed by simple geometry by:
+\begin{equation} Bump(x)=A\sin{P x}\end{equation}.  Where P is the period of the sinusoidal function
+
+Therefore, a schematic representation is shown below:
+
+\begin{figure}[ht]
+    \centering
+    % Call the command: {Length}{Height}{Label Offset}
+    \drawSinusoidalBump{4}{1.5}{0.3}
+    \caption{Bump Geometry.}
+\end{figure}
+
+\subsection{Parametrization}
+
+Typical vibration is conducted with respect to time, particularly since frequency is a time-domaine parameter. Therefore the following parametrization are used:
+\begin{equation}
+    t =\frac{L}{v} 
+\end{equation}
+
+The period of a sinusoidal wave can be expressed as follow:
+\begin{equation}
+    P = 2*L 
+\end{equation}
+Therefore to describe the applied change of height occuring, it can be denoted by the following y(t) function:
+\begin{equation}
+    y(t)=A\sin{(2*v*t)}
+\end{equation}
+
+Where y(t) is a piecewise function given by 
+\begin{equation}
+    \begin{cases} 
+        0 & t_i < 0 \\
+        y(t)=A\sin{(2*v*t)} & t_i<t<t_f \\ 
+        0 & t_f > \frac{L}{V}
+    \end{cases}
+\end{equation}
+
+As such we have characterized in the time domain the events to be considered. 
+
+\subsection{Shock Response}
+
+Since the value of $D$ is not extremely large compared to $L$ , the model cannot be assumed as an impulse. Rather it has to be treated as a shock response. 
+
+\subsection{Analysis between $t_i$ and $t_f$}
+\begin{figure}[H]
+    \centering
+    % Parameters: {Scale}{Width b}{Height h}
+        \drawSuspensionAnalysis{0.8}{5}{1.2}.
+    \caption{Body Analysis Diagram of the system over the bump.}
+\end{figure}
+
+
+
+The next step is to draw the free body diagram ,and applying Newton's Second law to obtain the governing equation
+
+
+From this the governing equations are given by
+\begin{equation}
+m\ddot{y}=-c(\dot{y}-\dot{y_0})-k(y-y_0)
+\end{equation}
+
+
+\end{document}
